@@ -3,17 +3,17 @@ import os
 
 # ---------- CONFIG ----------
 INPUT_FILE = r"NovaNXT Rx-Oct'25.csv"
-OUTPUT_FOLDER = "ZBM_Files_WideSummary"
-MASTER_FILE = "All_ZBMs_Wide_Summary.xlsx"
+OUTPUT_FOLDER = "ZBM_Files_Brandwise"
+MASTER_FILE = "All_ZBMs_Brandwise_Summary.xlsx"
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# ---------- LOAD DATA ROBUSTLY ----------
+# ---------- LOAD CSV ROBUSTLY ----------
 encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1", "cp850"]
 for enc in encodings:
     try:
         df = pd.read_csv(INPUT_FILE, encoding=enc)
-        print(f"✅ Loaded CSV successfully with encoding: {enc}")
+        print(f"✅ Loaded CSV successfully using encoding: {enc}")
         break
     except Exception as e:
         print(f"❌ Failed with {enc}: {e}")
@@ -34,7 +34,7 @@ rename_map = {
 }
 df.rename(columns=rename_map, inplace=True)
 
-# ---------- DETECT BRAND-RX COLUMN PAIRS ----------
+# ---------- DETECT BRAND–RX PAIRS ----------
 brand_cols = [c for c in df.columns if "Brand" in c and "Code" in c]
 rx_cols = [c for c in df.columns if "Rx/Month" in c]
 brand_rx_pairs = list(zip(brand_cols, rx_cols))
@@ -45,32 +45,46 @@ if not brand_rx_pairs:
 # ---------- CLEAN TYPES ----------
 df["Dr Code"] = df["Dr Code"].astype(str).str.strip()
 
-# ---------- HIERARCHY GROUP ----------
+# ---------- GROUP BY HIERARCHY ----------
 hierarchy_cols = ["ZBM Code", "ZBM Name", "TBM Code", "TBM Name", "ABM Code", "ABM Name"]
+grouped = df.groupby(hierarchy_cols)
 
-# ---------- CREATE SUMMARY ----------
-summary_rows = []
-for group_keys, group_df in df.groupby(hierarchy_cols):
-    summary = dict(zip(hierarchy_cols, group_keys))
+# ---------- AGGREGATE BRANDWISE ----------
+rows = []
+
+for keys, group in grouped:
+    record = dict(zip(hierarchy_cols, keys))
     
-    for brand_col, rx_col in brand_rx_pairs:
-        brand_name = brand_col.split(":")[0].strip()  # e.g., "Brand1"
-        unique_doctors = group_df.loc[group_df[brand_col].notna(), "Dr Code"].nunique()
-        total_rx = pd.to_numeric(group_df[rx_col], errors="coerce").sum()
+    # for each brand/rx column pair
+    for i, (brand_col, rx_col) in enumerate(brand_rx_pairs, start=1):
+        valid = group[pd.notna(group[brand_col])]
+        if valid.empty:
+            record[f"Brand{i}: Brand Code"] = None
+            record[f"Rx/Month{i}"] = 0
+            continue
         
-        summary[brand_col] = unique_doctors
-        summary[rx_col] = total_rx
-    
-    summary_rows.append(summary)
+        # get unique brands and their Rx totals
+        brands = valid[brand_col].dropna().unique()
+        rx_sum = valid.groupby(brand_col)[rx_col].sum(min_count=1)
+        dr_counts = valid.groupby(brand_col)["Dr Code"].nunique()
 
-summary_df = pd.DataFrame(summary_rows)
+        # if multiple brands exist in same column, pick top one by Rx sum
+        top_brand = rx_sum.sort_values(ascending=False).index[0]
+        record[f"Brand{i}: Brand Code"] = top_brand
+        record[f"Rx/Month{i}"] = rx_sum[top_brand]
+        record[f"Unique Drs {i}"] = dr_counts[top_brand]
+    
+    rows.append(record)
+
+summary_df = pd.DataFrame(rows)
 
 # ---------- SAVE PER ZBM (Option 1) ----------
 for (zbm_code, zbm_name), zbm_df in summary_df.groupby(["ZBM Code", "ZBM Name"]):
-    file_path = os.path.join(OUTPUT_FOLDER, f"ZBM_{zbm_code}_{zbm_name}_WideSummary.xlsx")
-    zbm_df.to_excel(file_path, index=False)
+    file_path = os.path.join(OUTPUT_FOLDER, f"ZBM_{zbm_code}_{zbm_name}_Brandwise.xlsx")
+    with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
+        zbm_df.to_excel(writer, index=False, sheet_name="Brand Summary")
     print(f"✅ Created {file_path}")
 
-# ---------- SAVE MASTER FILE (Option 2) ----------
+# ---------- SAVE MASTER SUMMARY (Option 2) ----------
 summary_df.to_excel(MASTER_FILE, index=False)
 print(f"✅ Master summary saved to {MASTER_FILE}")
