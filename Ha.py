@@ -1,150 +1,94 @@
 import pandas as pd
-import os, re, zipfile
+import os
 
-# === CONFIGURATION ===
-input_file = "NovaNXT Rx-Oct'25.csv"
-output_folder = "ZBM_Files"
-zip_file = "ZBM_Files.zip"
-master_summary_file = "Master_Brand_Summary.xlsx"
+# ---------- CONFIG ----------
+INPUT_FILE = r"NovaNXT Rx-Oct'25.csv"
+OUTPUT_FOLDER = "ZBM_Files"
+MASTER_SUMMARY_FILE = "All_ZBMs_Brand_Summary.xlsx"
 
-# --- 1️⃣  Robust CSV Reader ---
-def read_csv_robust(filepath):
-    encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1", "cp850"]
-    for enc in encodings:
-        try:
-            df = pd.read_csv(filepath, encoding=enc, dtype=str, low_memory=False)
-            print(f"✅ Read success with {enc}, rows={len(df)}")
-            return df
-        except Exception as e:
-            print(f"⚠️ {enc} failed: {e}")
-    df = pd.read_csv(filepath, encoding="latin-1", dtype=str, low_memory=False, errors="replace")
-    print("✅ Fallback read with latin-1 (errors replaced)")
-    return df
+# Create output directory
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-df = read_csv_robust(input_file)
-df.columns = df.columns.str.strip()
+# ---------- LOAD DATA ROBUSTLY ----------
+encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1", "cp850"]
+for enc in encodings:
+    try:
+        df = pd.read_csv(INPUT_FILE, encoding=enc)
+        print(f"✅ Loaded CSV successfully using encoding: {enc}")
+        break
+    except Exception as e:
+        print(f"❌ Failed with {enc}: {e}")
+else:
+    raise ValueError("Failed to read CSV with all tested encodings")
 
-# --- 2️⃣  Column mapping for hierarchy ---
-column_map = {
-    "ZBM Code": ["ZBM Code","zbm_code"],
-    "ZBM Name": ["ZBM Name","zbm_name"],
-    "ABM Code": ["ABM Code","abm_code"],
-    "ABM Name": ["ABM Name","abm_name"],
-    "Territory Code": ["Territory Code","tbm_code"],
-    "User: Full Name": ["User: Full Name","tbm_name"],
-    "Account: Customer Code": ["Account: Customer Code","Dr Code","doctor_code"]
+# ---------- CLEAN COLUMN NAMES ----------
+df.columns = [c.strip() for c in df.columns]
+
+# Rename key hierarchy columns
+rename_map = {
+    "ZBM Code": "ZBM Code",
+    "ZBM Name": "ZBM Name",
+    "ABM Code": "ABM Code",
+    "ABM Name": "ABM Name",
+    "Territory Code": "TBM Code",
+    "User: Full Name": "TBM Name",
+    "Account: Customer Code": "Dr Code"
 }
-def find_col(opts):
-    for o in opts:
-        if o in df.columns: return o
-    return None
-mapped = {k: find_col(v) for k,v in column_map.items()}
-if None in mapped.values():
-    missing = [k for k,v in mapped.items() if v is None]
-    raise ValueError(f"Missing required columns: {missing}")
+df.rename(columns=rename_map, inplace=True)
 
-# --- 3️⃣  Brand column detection ---
-brand_cols = []
-for i in range(1,11):
-    code_col = f"Brand{i}: Brand Code"
-    rx_col   = f"Rx/Month{i}"
-    if code_col in df.columns and rx_col in df.columns:
-        brand_cols.append((code_col, rx_col))
-if not brand_cols:
-    raise ValueError("No brand columns found (expected Brand1..Brand10).")
+# ---------- IDENTIFY BRAND COLUMNS ----------
+brand_cols = [c for c in df.columns if "Brand" in c and "Code" in c]
+rx_cols = [c for c in df.columns if "Rx/Month" in c]
 
-# --- 4️⃣  Clean hierarchy data ---
-hier_cols = list(mapped.keys())
-base_df = pd.DataFrame({k: df[mapped[k]].astype(str).fillna("").str.strip() for k in hier_cols})
+# Check if pairs match
+brand_rx_pairs = list(zip(brand_cols, rx_cols))
 
-# --- 5️⃣  Build brand summary ---
-brand_records = []
-for idx, row in base_df.iterrows():
-    zbm_c, zbm_n, abm_c, abm_n, tbm_c, tbm_n, dr = \
-        row["ZBM Code"], row["ZBM Name"], row["ABM Code"], row["ABM Name"], \
-        row["Territory Code"], row["User: Full Name"], row["Account: Customer Code"]
-    for (bcol, rxcol) in brand_cols:
-        brand = str(df.at[idx, bcol]).strip()
-        rx = df.at[idx, rxcol]
-        try:
-            rx_val = float(rx) if str(rx).strip() not in ["", "nan"] else 0.0
-        except:
-            rx_val = 0.0
-        if brand != "" or rx_val != 0:
-            brand_records.append({
-                "ZBM Code": zbm_c,
-                "ZBM Name": zbm_n,
-                "ABM Code": abm_c,
-                "ABM Name": abm_n,
-                "Territory Code": tbm_c,
-                "User: Full Name": tbm_n,
-                "Account: Customer Code": dr,
-                "Brand Code": brand,
-                "Rx/Month": rx_val
+# ---------- EXPAND BRANDS INTO LONG FORMAT ----------
+records = []
+for _, row in df.iterrows():
+    for brand_col, rx_col in brand_rx_pairs:
+        brand = row.get(brand_col)
+        rx = row.get(rx_col)
+        if pd.notna(brand):
+            records.append({
+                "ZBM Code": row.get("ZBM Code"),
+                "ZBM Name": row.get("ZBM Name"),
+                "TBM Code": row.get("TBM Code"),
+                "TBM Name": row.get("TBM Name"),
+                "ABM Code": row.get("ABM Code"),
+                "ABM Name": row.get("ABM Name"),
+                "Dr Code": row.get("Dr Code"),
+                "Brand": brand,
+                "Rx/Month": rx
             })
 
-brand_df = pd.DataFrame(brand_records)
+brand_df = pd.DataFrame(records)
+brand_df["Rx/Month"] = pd.to_numeric(brand_df["Rx/Month"], errors="coerce").fillna(0)
 
-# --- 6️⃣  Create per-ZBM files with brand summary (Option 1) ---
-os.makedirs(output_folder, exist_ok=True)
-created = []
+# ---------- CREATE PER-ZBM FILES (Option 1) ----------
+for zbm, group in brand_df.groupby(["ZBM Code", "ZBM Name"]):
+    zbm_code, zbm_name = zbm
+    file_path = os.path.join(OUTPUT_FOLDER, f"ZBM_{zbm_code}_{zbm_name}.xlsx")
 
-grouped = base_df.groupby(["ZBM Code","ZBM Name"], dropna=False)
-for (zbm_code, zbm_name), grp in grouped:
-    zbm_brands = brand_df.query("`ZBM Code` == @zbm_code and `ZBM Name` == @zbm_name")
-
-    # --- Summary counts ---
-    summary = pd.DataFrame({
-        "Metric": [
-            "Total Rows",
-            "Unique TBMs",
-            "Unique ABMs",
-            "Unique Doctors",
-            "Total Brand Entries",
-            "Total Rx (Sum)"
-        ],
-        "Value": [
-            len(grp),
-            grp["Territory Code"].nunique(),
-            grp["ABM Code"].nunique(),
-            grp["Account: Customer Code"].nunique(),
-            len(zbm_brands),
-            zbm_brands["Rx/Month"].sum()
-        ]
-    })
-
-    # --- Brand summary (per ABM) ---
-    brand_summary = (
-        zbm_brands.groupby(["ABM Code","ABM Name","Territory Code","User: Full Name"], dropna=False)
-        .agg(Brands_Handled=("Brand Code", lambda x: x.notna().sum()),
-             Total_Rx=("Rx/Month","sum"))
-        .reset_index()
+    # Summary per level
+    summary = group.groupby(["ZBM Code", "TBM Code", "ABM Code"], as_index=False).agg(
+        Total_Rx=("Rx/Month", "sum"),
+        Unique_Brands=("Brand", "nunique"),
+        Doctors=("Dr Code", "nunique")
     )
 
-    # --- Save to Excel ---
-    safe_name = re.sub(r'[\\/*?:"<>|]', "_", f"ZBM_{zbm_code}_{zbm_name}")[:150]
-    path = os.path.join(output_folder, f"{safe_name}.xlsx")
+    with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
+        group.to_excel(writer, index=False, sheet_name="Brand Summary")
+        summary.to_excel(writer, index=False, sheet_name="Summary")
 
-    with pd.ExcelWriter(path, engine="openpyxl") as w:
-        grp.to_excel(w, sheet_name="Data", index=False)
-        summary.to_excel(w, sheet_name="Summary", index=False)
-        brand_summary.to_excel(w, sheet_name="Brand Summary", index=False)
+    print(f"✅ Created {file_path}")
 
-    created.append(path)
-    print(f"✅ Created: {path}")
+# ---------- CREATE MASTER FILE (Option 2) ----------
+with pd.ExcelWriter(MASTER_SUMMARY_FILE, engine="xlsxwriter") as writer:
+    brand_df.to_excel(writer, index=False, sheet_name="All Data")
+    overall_summary = brand_df.groupby(
+        ["ZBM Code", "ZBM Name", "TBM Code", "ABM Code", "Brand"], as_index=False
+    ).agg(Total_Rx=("Rx/Month", "sum"))
+    overall_summary.to_excel(writer, index=False, sheet_name="Summary")
 
-# --- 7️⃣  Master Brand Summary (Option 2) ---
-master_summary = (
-    brand_df.groupby(["ZBM Code","ZBM Name","ABM Code","ABM Name","Territory Code","User: Full Name"], dropna=False)
-    .agg(Brands_Handled=("Brand Code", lambda x: x.notna().sum()),
-         Total_Rx=("Rx/Month","sum"))
-    .reset_index()
-)
-master_summary.to_excel(master_summary_file, index=False)
-print(f"📘 Master Brand Summary saved: {master_summary_file}")
-
-# --- 8️⃣  Zip all ZBM files ---
-with zipfile.ZipFile(zip_file, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-    for f in created:
-        zf.write(f, arcname=os.path.basename(f))
-print(f"📦 All ZBM files zipped → {zip_file}")
+print(f"✅ Master summary saved to {MASTER_SUMMARY_FILE}")
