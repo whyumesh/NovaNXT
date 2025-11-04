@@ -65,16 +65,35 @@ for final_name, original in mapped_cols.items():
 brand_rx_pairs = [(f"Brand{i}: Brand Code", f"Rx/Month{i}") for i in range(1, 11)]
 existing_pairs = [(b, r) for b, r in brand_rx_pairs if b in df.columns and r in df.columns]
 
-# === CLEAN BRAND AND RX COLUMNS ===
+# Convert Rx/Month columns to numeric
 for _, rx_col in existing_pairs:
     df[rx_col] = pd.to_numeric(df[rx_col], errors="coerce")
 
-# Merge the brand columns with main hierarchy dataframe by Account: Customer Code
-brand_cols = [col for pair in existing_pairs for col in pair]
-df_brand = df[[mapped_cols["Account: Customer Code"]] + brand_cols].copy()
+# === FIND HIGHEST Rx/MONTH FOR EACH ACCOUNT ===
+def get_highest_brand_rx(row):
+    max_val = float("-inf")
+    top_brand = None
+    for brand_col, rx_col in existing_pairs:
+        val = row.get(rx_col, None)
+        if pd.notna(val) and val > max_val:
+            max_val = val
+            top_brand = row.get(brand_col, None)
+    result = {brand_col: None for brand_col, _ in existing_pairs}
+    result.update({rx_col: None for _, rx_col in existing_pairs})
+    if pd.notna(top_brand):
+        # find which brand column had that brand and assign only that
+        for brand_col, rx_col in existing_pairs:
+            if row.get(brand_col) == top_brand and row.get(rx_col) == max_val:
+                result[brand_col] = top_brand
+                result[rx_col] = max_val
+                break
+    return pd.Series(result)
 
-# === Merge brand data into the main clean hierarchy ===
-df_full = df_clean.merge(df_brand, on=mapped_cols["Account: Customer Code"], how="left")
+# Apply per Account row
+brand_rx_filtered = df.apply(get_highest_brand_rx, axis=1)
+
+# Combine with main hierarchy dataframe
+df_full = pd.concat([df_clean, brand_rx_filtered], axis=1)
 
 # === CREATE OUTPUT FOLDER ===
 os.makedirs(output_folder, exist_ok=True)
