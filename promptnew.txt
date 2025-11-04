@@ -1,0 +1,2 @@
+no like this, i want is that how the columns are in the dataset brand and month i want it that way.
+that brand columns information should be in that column only and not sum it overall
