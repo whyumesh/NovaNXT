@@ -56,42 +56,31 @@ for final_name, options in column_map.items():
 if missing:
     raise ValueError(f"Missing required columns: {missing}")
 
-# === REORDER AND CLEAN DATA ===
+# === CLEAN AND REORDER CORE COLUMNS ===
 df_clean = pd.DataFrame()
 for final_name, original in mapped_cols.items():
     df_clean[final_name] = df[original].astype(str).fillna("").str.strip()
 
-# === STEP 2: Brand-wise highest Rx/Month (separately for each Brand column) ===
+# === STEP: For each Brand column, keep only the highest Rx/Month entry ===
 brand_rx_pairs = [(f"Brand{i}: Brand Code", f"Rx/Month{i}") for i in range(1, 11)]
-
-brand_summary = []
+df_result = pd.DataFrame()
 
 for brand_col, rx_col in brand_rx_pairs:
     if brand_col in df.columns and rx_col in df.columns:
-        df[rx_col] = pd.to_numeric(df[rx_col], errors="coerce")  # Convert to numeric
-        temp_df = df[[brand_col, rx_col]].dropna(subset=[brand_col])
-        if not temp_df.empty:
-            top_rx = temp_df[rx_col].max()  # Highest Rx/Month for this brand column
-            top_brand = temp_df.loc[temp_df[rx_col].idxmax(), brand_col]
-            brand_summary.append({
-                "Brand Column": brand_col,
-                "Top Brand Code": top_brand,
-                "Highest Rx/Month": top_rx
-            })
-        else:
-            brand_summary.append({
-                "Brand Column": brand_col,
-                "Top Brand Code": None,
-                "Highest Rx/Month": None
-            })
+        df[rx_col] = pd.to_numeric(df[rx_col], errors="coerce")
+        idx_max = df[rx_col].idxmax()
+        if pd.notna(idx_max):
+            top_row = df.loc[[idx_max], [mapped_cols["Account: Customer Code"], brand_col, rx_col]].copy()
+            df_result = pd.concat([df_result, top_row], axis=1)
     else:
-        brand_summary.append({
-            "Brand Column": brand_col,
-            "Top Brand Code": None,
-            "Highest Rx/Month": None
-        })
+        print(f"⚠️ Missing columns: {brand_col}, {rx_col}")
 
-brand_summary_df = pd.DataFrame(brand_summary)
+# === Flatten final DataFrame so columns appear side-by-side like in dataset ===
+final_brand_df = pd.DataFrame()
+for i, (brand_col, rx_col) in enumerate(brand_rx_pairs, start=1):
+    if brand_col in df_result.columns and rx_col in df_result.columns:
+        final_brand_df[f"Brand{i}: Brand Code"] = df_result[brand_col]
+        final_brand_df[f"Rx/Month{i}"] = df_result[rx_col]
 
 # === CREATE OUTPUT FOLDER ===
 os.makedirs(output_folder, exist_ok=True)
@@ -124,11 +113,11 @@ for (zbm_code, zbm_name), group in grouped:
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", f"ZBM_{zbm_code}_{zbm_name}")[:150]
     output_path = os.path.join(output_folder, f"{safe_name}.xlsx")
 
-    # Write Excel with Data + Summary + Brand Summary
+    # Write Excel with Data, Summary, and Highest Rx per Brand
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         group.to_excel(writer, sheet_name="Data", index=False)
         summary.to_excel(writer, sheet_name="Summary", index=False)
-        brand_summary_df.to_excel(writer, sheet_name="Brand Highest Rx", index=False)
+        final_brand_df.to_excel(writer, sheet_name="Highest Rx Per Brand", index=False)
 
     created_files.append(output_path)
     print(f"✅ Created: {output_path}")
