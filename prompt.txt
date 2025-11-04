@@ -1,5 +1,8 @@
 these are the next columns of brand and corresponding rx/month for each ABM
 Brand1: Brand Code	Rx/Month1	Brand2: Brand Code	Rx/Month2	Brand3: Brand Code	Rx/Month3	Brand4: Brand Code	Rx/Month4	Brand5: Brand Code	Rx/Month5	Brand6: Brand Code	Rx/Month6	Brand7: Brand Code	Rx/Month7	Brand8: Brand Code	Rx/Month8	Brand9: Brand Code	Rx/Month9	Brand10: Brand Code	Rx/Month10
-the brand and rx/month columns should be appended in the data where we have hierarchy summary for ZBM-TBM-ABM.
-we need brand name in brand column and count in the rx/month column of that respective brand month.
+now for every code in "Account: Customer Code" take corresponding brand name from "Brand1: Brand Code" column, and whatever is the 
+highest number in the corresponding "Rx/Month1" column take that. do this for every brand and its corresponding rx/month column.
+there are total 10 brand columns and 10 month columns. example : for "Brand1: Brand Code" column take the value from "Rx/Month1" column only.
+similar for the rest 10 columns.
+the motive behind this is to get the highest number of sale count in "Rx/Month" column of that particular brand. 
 
