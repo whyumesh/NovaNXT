@@ -56,44 +56,38 @@ for final_name, options in column_map.items():
 if missing:
     raise ValueError(f"Missing required columns: {missing}")
 
-# === CLEAN AND REORDER CORE COLUMNS ===
+# === CORE HIERARCHY DATA ===
 df_clean = pd.DataFrame()
 for final_name, original in mapped_cols.items():
     df_clean[final_name] = df[original].astype(str).fillna("").str.strip()
 
-# === STEP: For each Brand column, keep only the highest Rx/Month entry ===
+# === IDENTIFY BRAND & RX COLUMNS ===
 brand_rx_pairs = [(f"Brand{i}: Brand Code", f"Rx/Month{i}") for i in range(1, 11)]
-df_result = pd.DataFrame()
+existing_pairs = [(b, r) for b, r in brand_rx_pairs if b in df.columns and r in df.columns]
 
-for brand_col, rx_col in brand_rx_pairs:
-    if brand_col in df.columns and rx_col in df.columns:
-        df[rx_col] = pd.to_numeric(df[rx_col], errors="coerce")
-        idx_max = df[rx_col].idxmax()
-        if pd.notna(idx_max):
-            top_row = df.loc[[idx_max], [mapped_cols["Account: Customer Code"], brand_col, rx_col]].copy()
-            df_result = pd.concat([df_result, top_row], axis=1)
-    else:
-        print(f"⚠️ Missing columns: {brand_col}, {rx_col}")
+# === CLEAN BRAND AND RX COLUMNS ===
+for _, rx_col in existing_pairs:
+    df[rx_col] = pd.to_numeric(df[rx_col], errors="coerce")
 
-# === Flatten final DataFrame so columns appear side-by-side like in dataset ===
-final_brand_df = pd.DataFrame()
-for i, (brand_col, rx_col) in enumerate(brand_rx_pairs, start=1):
-    if brand_col in df_result.columns and rx_col in df_result.columns:
-        final_brand_df[f"Brand{i}: Brand Code"] = df_result[brand_col]
-        final_brand_df[f"Rx/Month{i}"] = df_result[rx_col]
+# Merge the brand columns with main hierarchy dataframe by Account: Customer Code
+brand_cols = [col for pair in existing_pairs for col in pair]
+df_brand = df[[mapped_cols["Account: Customer Code"]] + brand_cols].copy()
+
+# === Merge brand data into the main clean hierarchy ===
+df_full = df_clean.merge(df_brand, on=mapped_cols["Account: Customer Code"], how="left")
 
 # === CREATE OUTPUT FOLDER ===
 os.makedirs(output_folder, exist_ok=True)
 
 # === GROUP BY ZBM CODE + NAME ===
-grouped = df_clean.groupby(["ZBM Code", "ZBM Name"], dropna=False)
+grouped = df_full.groupby(["ZBM Code", "ZBM Name"], dropna=False)
 
 created_files = []
 
 for (zbm_code, zbm_name), group in grouped:
     group = group.drop_duplicates().reset_index(drop=True)
 
-    # Summary stats
+    # === SUMMARY ===
     summary = pd.DataFrame({
         "Metric": [
             "Total Rows in File",
@@ -109,15 +103,14 @@ for (zbm_code, zbm_name), group in grouped:
         ]
     })
 
-    # Safe filename
+    # === SAFE FILE NAME ===
     safe_name = re.sub(r'[\\/*?:"<>|]', "_", f"ZBM_{zbm_code}_{zbm_name}")[:150]
     output_path = os.path.join(output_folder, f"{safe_name}.xlsx")
 
-    # Write Excel with Data, Summary, and Highest Rx per Brand
+    # === WRITE TO EXCEL ===
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         group.to_excel(writer, sheet_name="Data", index=False)
         summary.to_excel(writer, sheet_name="Summary", index=False)
-        final_brand_df.to_excel(writer, sheet_name="Highest Rx Per Brand", index=False)
 
     created_files.append(output_path)
     print(f"✅ Created: {output_path}")
