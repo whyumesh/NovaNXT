@@ -1,90 +1,109 @@
 import pandas as pd
 import os
+import zipfile
+import re
 
-# ---------- CONFIG ----------
-INPUT_FILE = r"NovaNXT Rx-Oct'25.csv"
-OUTPUT_FOLDER = "ZBM_Files_Brandwise"
-MASTER_FILE = "All_ZBMs_Brandwise_Summary.xlsx"
+# === CONFIGURATION ===
+input_file = "NovaNXT Rx-Oct'25.csv"  # Path to your CSV
+output_folder = "ZBM_Files"            # Folder to store ZBM Excel files
+zip_file = "ZBM_Files.zip"             # Final zip file name
 
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+# === FUNCTION TO READ CSV ROBUSTLY ===
+def read_csv_robust(filepath):
+    encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1", "cp850"]
+    for enc in encodings:
+        try:
+            df = pd.read_csv(filepath, encoding=enc, dtype=str, low_memory=False)
+            print(f"✅ Successfully read with encoding: {enc} — Rows: {len(df)}")
+            return df
+        except Exception as e:
+            print(f"⚠️ Failed with encoding {enc}: {e}")
+    # Fallback read
+    df = pd.read_csv(filepath, encoding="latin-1", dtype=str, low_memory=False, errors="replace")
+    print("✅ Fallback read with latin-1 (errors replaced)")
+    return df
 
-# ---------- LOAD CSV ROBUSTLY ----------
-encodings = ["utf-8", "utf-8-sig", "cp1252", "latin-1", "iso-8859-1", "cp850"]
-for enc in encodings:
-    try:
-        df = pd.read_csv(INPUT_FILE, encoding=enc)
-        print(f"✅ Loaded CSV successfully using encoding: {enc}")
-        break
-    except Exception as e:
-        print(f"❌ Failed with {enc}: {e}")
-else:
-    raise ValueError("Failed to read CSV with all tested encodings")
+# === READ INPUT FILE ===
+df = read_csv_robust(input_file)
+df.columns = df.columns.str.strip()  # Clean header spaces
 
-df.columns = [c.strip() for c in df.columns]
-
-# ---------- RENAME CORE COLUMNS ----------
-rename_map = {
-    "ZBM Code": "ZBM Code",
-    "ZBM Name": "ZBM Name",
-    "ABM Code": "ABM Code",
-    "ABM Name": "ABM Name",
-    "Territory Code": "TBM Code",
-    "User: Full Name": "TBM Name",
-    "Account: Customer Code": "Dr Code",
+# === COLUMN MAPPING ===
+column_map = {
+    "ZBM Code": ["ZBM Code", "zbm_code", "ZBMCode"],
+    "ZBM Name": ["ZBM Name", "zbm_name", "ZBMName"],
+    "ABM Code": ["ABM Code", "abm_code", "ABMCode"],
+    "ABM Name": ["ABM Name", "abm_name", "ABMName"],
+    "Territory Code": ["Territory Code", "territory_code", "TBM Code", "tbm_code"],
+    "User: Full Name": ["User: Full Name", "user_full_name", "TBM Name", "tbm_name"],
+    "Account: Customer Code": ["Account: Customer Code", "Dr Code", "doctor_code"]
 }
-df.rename(columns=rename_map, inplace=True)
 
-# ---------- DETECT BRAND–RX PAIRS ----------
-brand_cols = [c for c in df.columns if "Brand" in c and "Code" in c]
-rx_cols = [c for c in df.columns if "Rx/Month" in c]
-brand_rx_pairs = list(zip(brand_cols, rx_cols))
+def find_column(possible_names):
+    for name in possible_names:
+        if name in df.columns:
+            return name
+    return None
 
-if not brand_rx_pairs:
-    raise ValueError("❌ No Brand–Rx/Month pairs found. Please check CSV headers.")
+mapped_cols = {}
+missing = []
+for final_name, options in column_map.items():
+    col = find_column(options)
+    if col:
+        mapped_cols[final_name] = col
+    else:
+        missing.append(final_name)
 
-# ---------- CLEAN TYPES ----------
-df["Dr Code"] = df["Dr Code"].astype(str).str.strip()
+if missing:
+    raise ValueError(f"Missing required columns: {missing}")
 
-# ---------- GROUP BY HIERARCHY ----------
-hierarchy_cols = ["ZBM Code", "ZBM Name", "TBM Code", "TBM Name", "ABM Code", "ABM Name"]
-grouped = df.groupby(hierarchy_cols)
+# === REORDER AND CLEAN DATA ===
+df_clean = pd.DataFrame()
+for final_name, original in mapped_cols.items():
+    df_clean[final_name] = df[original].astype(str).fillna("").str.strip()
 
-# ---------- AGGREGATE BRANDWISE ----------
-rows = []
+# === CREATE OUTPUT FOLDER ===
+os.makedirs(output_folder, exist_ok=True)
 
-for keys, group in grouped:
-    record = dict(zip(hierarchy_cols, keys))
-    
-    # for each brand/rx column pair
-    for i, (brand_col, rx_col) in enumerate(brand_rx_pairs, start=1):
-        valid = group[pd.notna(group[brand_col])]
-        if valid.empty:
-            record[f"Brand{i}: Brand Code"] = None
-            record[f"Rx/Month{i}"] = 0
-            continue
-        
-        # get unique brands and their Rx totals
-        brands = valid[brand_col].dropna().unique()
-        rx_sum = valid.groupby(brand_col)[rx_col].sum(min_count=1)
-        dr_counts = valid.groupby(brand_col)["Dr Code"].nunique()
+# === GROUP BY ZBM CODE + NAME ===
+grouped = df_clean.groupby(["ZBM Code", "ZBM Name"], dropna=False)
 
-        # if multiple brands exist in same column, pick top one by Rx sum
-        top_brand = rx_sum.sort_values(ascending=False).index[0]
-        record[f"Brand{i}: Brand Code"] = top_brand
-        record[f"Rx/Month{i}"] = rx_sum[top_brand]
-        record[f"Unique Drs {i}"] = dr_counts[top_brand]
-    
-    rows.append(record)
+created_files = []
 
-summary_df = pd.DataFrame(rows)
+for (zbm_code, zbm_name), group in grouped:
+    group = group.drop_duplicates().reset_index(drop=True)
 
-# ---------- SAVE PER ZBM (Option 1) ----------
-for (zbm_code, zbm_name), zbm_df in summary_df.groupby(["ZBM Code", "ZBM Name"]):
-    file_path = os.path.join(OUTPUT_FOLDER, f"ZBM_{zbm_code}_{zbm_name}_Brandwise.xlsx")
-    with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
-        zbm_df.to_excel(writer, index=False, sheet_name="Brand Summary")
-    print(f"✅ Created {file_path}")
+    # Summary stats
+    summary = pd.DataFrame({
+        "Metric": [
+            "Total Rows in File",
+            "Unique TBM (Territory Code)",
+            "Unique ABM Code",
+            "Unique Doctor (Account: Customer Code)"
+        ],
+        "Value": [
+            len(group),
+            group["Territory Code"].nunique(),
+            group["ABM Code"].nunique(),
+            group["Account: Customer Code"].nunique()
+        ]
+    })
 
-# ---------- SAVE MASTER SUMMARY (Option 2) ----------
-summary_df.to_excel(MASTER_FILE, index=False)
-print(f"✅ Master summary saved to {MASTER_FILE}")
+    # Safe filename
+    safe_name = re.sub(r'[\\/*?:"<>|]', "_", f"ZBM_{zbm_code}_{zbm_name}")[:150]
+    output_path = os.path.join(output_folder, f"{safe_name}.xlsx")
+
+    # Write Excel with Data + Summary sheets
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        group.to_excel(writer, sheet_name="Data", index=False)
+        summary.to_excel(writer, sheet_name="Summary", index=False)
+
+    created_files.append(output_path)
+    print(f"✅ Created: {output_path}")
+
+# === ZIP ALL FILES ===
+with zipfile.ZipFile(zip_file, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for f in created_files:
+        zf.write(f, arcname=os.path.basename(f))
+
+print(f"\n🎉 All done! {len(created_files)} files created.")
+print(f"📦 Zipped file: {zip_file}")
