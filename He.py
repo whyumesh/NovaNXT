@@ -1,4 +1,6 @@
-Here's the modified code that creates a single Excel file with separate sheets for each ZBM:
+Here's the complete updated code:
+
+```python
 import pandas as pd
 import os
 import re
@@ -94,42 +96,19 @@ brand_rx_filtered = df.apply(get_highest_brand_rx, axis=1)
 # Combine with main hierarchy dataframe
 df_full = pd.concat([df_clean, brand_rx_filtered], axis=1)
 
-# === GROUP BY ZBM CODE + NAME ===
-grouped = df_full.groupby(["ZBM Code", "ZBM Name"], dropna=False)
+# === REMOVE DUPLICATES ===
+df_full = df_full.drop_duplicates().reset_index(drop=True)
 
-# === CREATE SINGLE EXCEL FILE WITH MULTIPLE SHEETS ===
+# === CREATE SINGLE EXCEL FILE ===
 with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+    # Write all data in a single sheet
+    df_full.to_excel(writer, sheet_name="All ZBM Data", index=False)
     
-    # Create an overall summary sheet
-    overall_summary = pd.DataFrame({
-        "ZBM Code": [],
-        "ZBM Name": [],
-        "Total Rows": [],
-        "Unique TBM": [],
-        "Unique ABM": [],
-        "Unique Doctors": []
-    })
+    # Create summary sheet
+    grouped = df_full.groupby(["ZBM Code", "ZBM Name"], dropna=False)
     
     summary_data = []
-    sheet_count = 0
-    
     for (zbm_code, zbm_name), group in grouped:
-        group = group.drop_duplicates().reset_index(drop=True)
-        
-        # Create safe sheet name (Excel limits: 31 chars, no special chars)
-        safe_sheet_name = re.sub(r'[\\/*?\[\]:"]', "_", f"{zbm_code}_{zbm_name}")[:31]
-        
-        # Ensure unique sheet name
-        original_name = safe_sheet_name
-        counter = 1
-        while safe_sheet_name in writer.sheets:
-            safe_sheet_name = f"{original_name[:28]}_{counter}"
-            counter += 1
-        
-        # Write data to sheet
-        group.to_excel(writer, sheet_name=safe_sheet_name, index=False)
-        
-        # Collect summary data
         summary_data.append({
             "ZBM Code": zbm_code,
             "ZBM Name": zbm_name,
@@ -138,27 +117,25 @@ with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
             "Unique ABM": group["ABM Code"].nunique(),
             "Unique Doctors": group["Account: Customer Code"].nunique()
         })
-        
-        sheet_count += 1
-        print(f"✅ Added sheet: {safe_sheet_name}")
     
-    # Write overall summary as first sheet
-    overall_summary = pd.DataFrame(summary_data)
-    overall_summary.to_excel(writer, sheet_name="Overall Summary", index=False)
-    
-    # Move summary sheet to first position
-    workbook = writer.book
-    summary_sheet = workbook["Overall Summary"]
-    workbook.move_sheet(summary_sheet, offset=-sheet_count)
+    summary_df = pd.DataFrame(summary_data)
+    summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
-print(f"\n🎉 All done! Created {sheet_count} sheets in one file.")
+print(f"\n🎉 All done! All ZBM data combined in one sheet.")
 print(f"📄 Output file: {output_file}")
-Key changes:
-Single file output: Creates one Excel file (ZBM_Combined_Report.xlsx) instead of multiple files
-Multiple sheets: Each ZBM gets its own sheet within the file
-Overall Summary: Added a summary sheet (placed first) showing metrics for all ZBMs
-No ZIP file: Since everything is in one file, no need for zipping
-Sheet name handling: Excel sheet names are limited to 31 characters and can't contain special characters - the code handles this automatically
-The file will contain:
-Overall Summary sheet: Lists all ZBMs with their row counts and unique counts
-One sheet per ZBM: Contains the filtered data for that ZBM
+print(f"📊 Total rows: {len(df_full)}")
+print(f"📊 Total ZBMs: {df_full['ZBM Code'].nunique()}")
+```
+
+This complete code will:
+
+1. **Read** your CSV file with robust encoding detection
+2. **Map** columns to standardized names
+3. **Filter** to keep only the highest Rx/Month brand per account
+4. **Combine** all ZBM data into a single sheet (stacked vertically)
+5. **Create** a summary sheet with metrics per ZBM
+6. **Output** one Excel file with two sheets:
+   - "All ZBM Data" - all records in one continuous sheet
+   - "Summary" - breakdown by ZBM Code showing row counts and unique counts
+
+No separate files, no ZIP file - just one clean Excel workbook with all data combined.
