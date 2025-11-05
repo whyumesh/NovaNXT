@@ -1,12 +1,11 @@
+Here's the modified code that creates a single Excel file with separate sheets for each ZBM:
 import pandas as pd
 import os
-import zipfile
 import re
 
 # === CONFIGURATION ===
 input_file = "NovaNXT Rx-Oct'25.csv"  # Path to your CSV
-output_folder = "ZBM_Files"            # Folder to store ZBM Excel files
-zip_file = "ZBM_Files.zip"             # Final zip file name
+output_file = "ZBM_Combined_Report.xlsx"  # Single output file
 
 # === FUNCTION TO READ CSV ROBUSTLY ===
 def read_csv_robust(filepath):
@@ -95,49 +94,71 @@ brand_rx_filtered = df.apply(get_highest_brand_rx, axis=1)
 # Combine with main hierarchy dataframe
 df_full = pd.concat([df_clean, brand_rx_filtered], axis=1)
 
-# === CREATE OUTPUT FOLDER ===
-os.makedirs(output_folder, exist_ok=True)
-
 # === GROUP BY ZBM CODE + NAME ===
 grouped = df_full.groupby(["ZBM Code", "ZBM Name"], dropna=False)
 
-created_files = []
-
-for (zbm_code, zbm_name), group in grouped:
-    group = group.drop_duplicates().reset_index(drop=True)
-
-    # === SUMMARY ===
-    summary = pd.DataFrame({
-        "Metric": [
-            "Total Rows in File",
-            "Unique TBM (Territory Code)",
-            "Unique ABM Code",
-            "Unique Doctor (Account: Customer Code)"
-        ],
-        "Value": [
-            len(group),
-            group["Territory Code"].nunique(),
-            group["ABM Code"].nunique(),
-            group["Account: Customer Code"].nunique()
-        ]
+# === CREATE SINGLE EXCEL FILE WITH MULTIPLE SHEETS ===
+with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+    
+    # Create an overall summary sheet
+    overall_summary = pd.DataFrame({
+        "ZBM Code": [],
+        "ZBM Name": [],
+        "Total Rows": [],
+        "Unique TBM": [],
+        "Unique ABM": [],
+        "Unique Doctors": []
     })
+    
+    summary_data = []
+    sheet_count = 0
+    
+    for (zbm_code, zbm_name), group in grouped:
+        group = group.drop_duplicates().reset_index(drop=True)
+        
+        # Create safe sheet name (Excel limits: 31 chars, no special chars)
+        safe_sheet_name = re.sub(r'[\\/*?\[\]:"]', "_", f"{zbm_code}_{zbm_name}")[:31]
+        
+        # Ensure unique sheet name
+        original_name = safe_sheet_name
+        counter = 1
+        while safe_sheet_name in writer.sheets:
+            safe_sheet_name = f"{original_name[:28]}_{counter}"
+            counter += 1
+        
+        # Write data to sheet
+        group.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+        
+        # Collect summary data
+        summary_data.append({
+            "ZBM Code": zbm_code,
+            "ZBM Name": zbm_name,
+            "Total Rows": len(group),
+            "Unique TBM": group["Territory Code"].nunique(),
+            "Unique ABM": group["ABM Code"].nunique(),
+            "Unique Doctors": group["Account: Customer Code"].nunique()
+        })
+        
+        sheet_count += 1
+        print(f"✅ Added sheet: {safe_sheet_name}")
+    
+    # Write overall summary as first sheet
+    overall_summary = pd.DataFrame(summary_data)
+    overall_summary.to_excel(writer, sheet_name="Overall Summary", index=False)
+    
+    # Move summary sheet to first position
+    workbook = writer.book
+    summary_sheet = workbook["Overall Summary"]
+    workbook.move_sheet(summary_sheet, offset=-sheet_count)
 
-    # === SAFE FILE NAME ===
-    safe_name = re.sub(r'[\\/*?:"<>|]', "_", f"ZBM_{zbm_code}_{zbm_name}")[:150]
-    output_path = os.path.join(output_folder, f"{safe_name}.xlsx")
-
-    # === WRITE TO EXCEL ===
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        group.to_excel(writer, sheet_name="Data", index=False)
-        summary.to_excel(writer, sheet_name="Summary", index=False)
-
-    created_files.append(output_path)
-    print(f"✅ Created: {output_path}")
-
-# === ZIP ALL FILES ===
-with zipfile.ZipFile(zip_file, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-    for f in created_files:
-        zf.write(f, arcname=os.path.basename(f))
-
-print(f"\n🎉 All done! {len(created_files)} files created.")
-print(f"📦 Zipped file: {zip_file}")
+print(f"\n🎉 All done! Created {sheet_count} sheets in one file.")
+print(f"📄 Output file: {output_file}")
+Key changes:
+Single file output: Creates one Excel file (ZBM_Combined_Report.xlsx) instead of multiple files
+Multiple sheets: Each ZBM gets its own sheet within the file
+Overall Summary: Added a summary sheet (placed first) showing metrics for all ZBMs
+No ZIP file: Since everything is in one file, no need for zipping
+Sheet name handling: Excel sheet names are limited to 31 characters and can't contain special characters - the code handles this automatically
+The file will contain:
+Overall Summary sheet: Lists all ZBMs with their row counts and unique counts
+One sheet per ZBM: Contains the filtered data for that ZBM
