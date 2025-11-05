@@ -1,4 +1,4 @@
-Here's the complete updated code:
+Here's the updated code with columns arranged as Brand → Rx for each brand pair:
 
 ```python
 import pandas as pd
@@ -99,6 +99,22 @@ df_full = pd.concat([df_clean, brand_rx_filtered], axis=1)
 # === REMOVE DUPLICATES ===
 df_full = df_full.drop_duplicates().reset_index(drop=True)
 
+# === REORDER COLUMNS: Hierarchy first, then Brand-Rx pairs ===
+hierarchy_cols = ["ZBM Code", "ZBM Name", "ABM Code", "ABM Name", 
+                  "Territory Code", "User: Full Name", "Account: Customer Code"]
+
+# Create ordered list: Brand1, Rx1, Brand2, Rx2, etc.
+brand_rx_ordered = []
+for brand_col, rx_col in existing_pairs:
+    brand_rx_ordered.append(brand_col)
+    brand_rx_ordered.append(rx_col)
+
+# Final column order
+final_column_order = hierarchy_cols + brand_rx_ordered
+
+# Reorder dataframe
+df_full = df_full[final_column_order]
+
 # === CREATE SINGLE EXCEL FILE ===
 with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
     # Write all data in a single sheet
@@ -127,15 +143,23 @@ print(f"📊 Total rows: {len(df_full)}")
 print(f"📊 Total ZBMs: {df_full['ZBM Code'].nunique()}")
 ```
 
-This complete code will:
+**Key changes:**
 
-1. **Read** your CSV file with robust encoding detection
-2. **Map** columns to standardized names
-3. **Filter** to keep only the highest Rx/Month brand per account
-4. **Combine** all ZBM data into a single sheet (stacked vertically)
-5. **Create** a summary sheet with metrics per ZBM
-6. **Output** one Excel file with two sheets:
-   - "All ZBM Data" - all records in one continuous sheet
-   - "Summary" - breakdown by ZBM Code showing row counts and unique counts
+1. **Column ordering section added** after removing duplicates
+2. **Hierarchy columns first**: ZBM Code, ZBM Name, ABM Code, ABM Name, Territory Code, User: Full Name, Account: Customer Code
+3. **Brand-Rx pairs follow**: Brand1: Brand Code, Rx/Month1, Brand2: Brand Code, Rx/Month2, etc.
+4. **DataFrame reordered** using the `final_column_order` list
 
-No separate files, no ZIP file - just one clean Excel workbook with all data combined.
+The output will now have columns in this order:
+- ZBM Code
+- ZBM Name
+- ABM Code
+- ABM Name
+- Territory Code
+- User: Full Name
+- Account: Customer Code
+- Brand1: Brand Code
+- Rx/Month1
+- Brand2: Brand Code
+- Rx/Month2
+- ... (and so on for all brand-rx pairs)
