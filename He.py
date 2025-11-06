@@ -1,6 +1,3 @@
-Here's the updated code with columns arranged as Brand → Rx for each brand pair:
-
-```python
 import pandas as pd
 import os
 import re
@@ -141,25 +138,3 @@ print(f"\n🎉 All done! All ZBM data combined in one sheet.")
 print(f"📄 Output file: {output_file}")
 print(f"📊 Total rows: {len(df_full)}")
 print(f"📊 Total ZBMs: {df_full['ZBM Code'].nunique()}")
-```
-
-**Key changes:**
-
-1. **Column ordering section added** after removing duplicates
-2. **Hierarchy columns first**: ZBM Code, ZBM Name, ABM Code, ABM Name, Territory Code, User: Full Name, Account: Customer Code
-3. **Brand-Rx pairs follow**: Brand1: Brand Code, Rx/Month1, Brand2: Brand Code, Rx/Month2, etc.
-4. **DataFrame reordered** using the `final_column_order` list
-
-The output will now have columns in this order:
-- ZBM Code
-- ZBM Name
-- ABM Code
-- ABM Name
-- Territory Code
-- User: Full Name
-- Account: Customer Code
-- Brand1: Brand Code
-- Rx/Month1
-- Brand2: Brand Code
-- Rx/Month2
-- ... (and so on for all brand-rx pairs)
